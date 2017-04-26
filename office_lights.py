@@ -10,8 +10,8 @@ class office_lights(appapi.my_appapi):
     self.light_max=50
     self.light_dim=25
 
-    self.hi_temp=75
-    self.lo_temp=68
+    self.hi_temp=74
+    self.lo_temp=71
 
     self.targets={"light.office_lights":{"triggers":{"light.office_lights":{"type":"light","bit":64,"onValue":"on"},
                                                         "sensor.office_door_access_control_4_9":{"type":"door","bit":2,"onValue":"23"},
@@ -102,19 +102,18 @@ class office_lights(appapi.my_appapi):
   def normalize_state(self,target,trigger,newstate):
     if newstate==None:                   # handle a newstate of none, typically means the object didn't exist.
       newstate=self.get_state(target)    # if thats the case, just return the state of the target so nothing changes.
+    try:
+      currenttemp=int(float(newstate))
+    except:
+      a=0
 
-    if type(newstate)==str:                          # deal with a new state that's a string
-      if newstate in ["home","house","Home","House"]:  # deal with having multiple versions of house and home to account for.
-        newstate="home"
-    else:                                            # if it's not a string, we are assuming it's a number.  May not be true, but for now it should be.
-      if self.targets[target]["triggers"][trigger]["type"]=="temperature":     # is it a temperature.
-        currenttemp = int(float(newstate))           # convert floating point to integer.
-        if currenttemp>=hi_temp:                     # handle temp Hi / Low state setting to on/off.  
-          newstate="on"
-        elif currenttemp<=self.low_temp:
-          newstate="off"
-        else:
-          newstate= self.get_state(target)              # If new state is in between target points, just return current state of target so nothing changes.
-      else:                                          # we have a number, but it's not a temperature so leave the value alone.
-        self.log("newstate is a number, but not a temperature, so leave it alone : {}".format(newstate))
+    if newstate in ["home","house","Home","House"]:  # deal with having multiple versions of house and home to account for.
+      newstate="home"
+    elif self.targets[target]["triggers"][trigger]["type"]=="temperature":     # is it a temperature.
+      if currenttemp>=self.hi_temp:                     # handle temp Hi / Low state setting to on/off.  
+        newstate="on"
+      elif currenttemp<=self.low_temp:
+        newstate="off"
+      else:
+        newstate= self.get_state(target)              # If new state is in between target points, just return current state of target so nothing changes.
     return newstate
