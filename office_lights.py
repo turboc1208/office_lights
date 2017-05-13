@@ -11,12 +11,12 @@ class office_lights(appapi.my_appapi):
     self.light_dim=25
 
     self.hi_temp=74
-    self.lo_temp=71
+    self.lo_temp=70
 
     self.targets={"light.office_lights":{"triggers":{"light.office_lights":{"type":"light","bit":64,"onValue":"on"},
-                                                        "sensor.office_door_access_control_4_9":{"type":"door","bit":2,"onValue":"23"},
+                                                        "sensor.office_door_access_control_4_9":{"type":"door","bit":2,"onValue":"on"},
                                                         "media_player.office_directv":{"type":"media","bit":16,"onValue":"playing"},
-                                                        "sensor.office_sensor_burglar_11_10":{"type":"motion","bit":4,"onValue":"8"},
+                                                        "input_boolean.officemotion":{"type":"motion","bit":4,"onValue":"on"},
                                                         "input_boolean.officeishomeoverride":{"type":"override","bit":1,"onValue":"on"}},
                                             "type":"light",
                                             "offState":[0,1,4,5,8,9,12,13,16,17,20,21,24,25,28,29,32,33,36,37,40,41,44,45,48,49,56,57,64,72,73,80,88,96,104,112,120],
@@ -46,14 +46,13 @@ class office_lights(appapi.my_appapi):
       self.process_light_state(ent)      # process each light as we register a callback for it's triggers rather than wait for a trigger to fire first.
 
 
-  ########
+  ########   
   #
   # state change handler.  All it does is call process_light_state all the work is done there.
   #
   def light_state_handler(self,trigger,attr,old,new,kwargs):
     self.log("trigger = {}, attr={}, old={}, new={}, kwargs={}".format(trigger,attr,old,new,kwargs))
     self.process_light_state(kwargs["target"])
-
 
   ########
   #
@@ -69,15 +68,19 @@ class office_lights(appapi.my_appapi):
     # bits are assigned in targets dictionary.
 
     for trigger in self.targets[target]["triggers"]:      # loop through triggers
-      self.log("trigger={} type={} onValue={} bit={} currentvalue={}".format(trigger,self.targets[target]["triggers"][trigger]["type"],self.targets[target]["triggers"][trigger]["onValue"],
-                                                      self.targets[target]["triggers"][trigger]["bit"],self.normalize_state(target,trigger,self.get_state(trigger))))
+      trigger_type = self.targets[target]["triggers"][trigger]["type"]
+      onValue = self.targets[target]["triggers"][trigger]["onValue"]
+      bit = self.targets[target]["triggers"][trigger]["bit"]
+      trigger_state = self.normalize_state(target,trigger,trigger_type)
+    
+      self.log("trigger={} type={} onValue={} bit={} currentvalue={}".format(trigger,trigger_type,onValue,bit,trigger_state))
       # or value for this trigger to existing state bits.
-      state=state | (self.targets[target]["triggers"][trigger]["bit"] if (self.normalize_state(target,trigger,self.get_state(trigger))==self.targets[target]["triggers"][trigger]["onValue"]) else 0)
+      state = state | ( bit if (trigger_state==onValue) else 0)
       self.log("state = {}".format(state))
       # typebits is a quick access array that takes the friendly type of the trigger and associates it with it's bit
       # it's just to make it easier to search later.
-      type_bits[self.targets[target]["triggers"][trigger]["type"]]=self.targets[target]["triggers"][trigger]["bit"]
-
+      type_bits[trigger_type]=bit
+  
 
     self.log("state={}".format(state))
     if not state & type_bits["override"]:               # if the override bit is set, then don't evaluate anything else.  Think of it as manual mode.
@@ -99,21 +102,17 @@ class office_lights(appapi.my_appapi):
   #
   # normalize_state - take incoming states and convert any that are calculated to on/off values.
   #
-  def normalize_state(self,target,trigger,newstate):
+  def normalize_state(self,target,trigger,type):
+    newstate=self.get_state(trigger,type=type,min=self.lo_temp,max=self.hi_temp)
+    self.log("{} newstate={}".format(trigger,newstate))
     if newstate==None:                   # handle a newstate of none, typically means the object didn't exist.
       newstate=self.get_state(target)    # if thats the case, just return the state of the target so nothing changes.
     try:
       currenttemp=int(float(newstate))
     except:
       a=0
-
     if newstate in ["home","house","Home","House"]:  # deal with having multiple versions of house and home to account for.
       newstate="home"
-    elif self.targets[target]["triggers"][trigger]["type"]=="temperature":     # is it a temperature.
-      if currenttemp>=self.hi_temp:                     # handle temp Hi / Low state setting to on/off.  
-        newstate="on"
-      elif currenttemp<=self.low_temp:
-        newstate="off"
-      else:
-        newstate= self.get_state(target)              # If new state is in between target points, just return current state of target so nothing changes.
+    elif newstate == "unk":
+      newstate=self.get_state(target)
     return newstate
