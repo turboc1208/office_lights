@@ -12,7 +12,7 @@ class office_lights(appapi.my_appapi):
 
     self.hi_temp=74
     self.lo_temp=70
-
+    self.last_state=-1
     self.targets={"light.office_lights":{"triggers":{"light.office_lights":{"type":"light","bit":64,"onValue":"on"},
                                                         "sensor.office_door_access_control_4_9":{"type":"door","bit":2,"onValue":"on"},
                                                         "media_player.office_directv":{"type":"media","bit":16,"onValue":"playing"},
@@ -26,7 +26,7 @@ class office_lights(appapi.my_appapi):
                                                         65,66,67,68,69,70,71,74,75,76,77,78,79,81,82,83,84,85,86,87,89,90,91,92,93,94,95,97,98,99,100,101,102,103,
                                                         104,105,106,107,108,109,110,111,113,114,115,116,117,118,119,121,122,123,124,125,126,127],
                                             "callback":self.light_state_handler},
-                 "light.office_fan":{"triggers":{"light.office_fan":{"type":"fan","bit":32,"onValue":"on"},
+                 "light.office_fan_2":{"triggers":{"light.office_fan_2":{"type":"fan","bit":32,"onValue":"on"},
                                                      "sensor.office_sensor_temperature_11_1":{"type":"temperature","bit":8,"onValue":"on"},
                                                      "input_boolean.officeishomeoverride":{"type":"override","bit":1,"onValue":"on"}},
                                          "type":"fan",
@@ -44,9 +44,10 @@ class office_lights(appapi.my_appapi):
         self.log("registering callback for {} on {} for target {}".format(ent_trigger,self.targets[ent]["callback"],ent))
         self.listen_state(self.targets[ent]["callback"],ent_trigger,target=ent)
       self.process_light_state(ent)      # process each light as we register a callback for it's triggers rather than wait for a trigger to fire first.
+    self.log("calling listen_if")
+    self.listen_if(self.li_handle,"sensor.office_sensor_temperature_11_1","state",">=",70)
+    self.listen_if(self.li_handle,"device_tracker.turboc1208_cc1208","state","in",["home","house"])
 
-
-  ########   
   #
   # state change handler.  All it does is call process_light_state all the work is done there.
   #
@@ -72,29 +73,33 @@ class office_lights(appapi.my_appapi):
       onValue = self.targets[target]["triggers"][trigger]["onValue"]
       bit = self.targets[target]["triggers"][trigger]["bit"]
       trigger_state = self.normalize_state(target,trigger,trigger_type)
-    
-      self.log("trigger={} type={} onValue={} bit={} currentvalue={}".format(trigger,trigger_type,onValue,bit,trigger_state))
+ 
+      #self.log("trigger={} type={} onValue={} bit={} currentvalue={}".format(trigger,trigger_type,onValue,bit,trigger_state))
       # or value for this trigger to existing state bits.
       state = state | ( bit if (trigger_state==onValue) else 0)
-      self.log("state = {}".format(state))
+      #self.log("state = {}".format(state))
       # typebits is a quick access array that takes the friendly type of the trigger and associates it with it's bit
       # it's just to make it easier to search later.
       type_bits[trigger_type]=bit
   
 
-    self.log("state={}".format(state))
+    #self.log("state={}".format(state))
     if not state & type_bits["override"]:               # if the override bit is set, then don't evaluate anything else.  Think of it as manual mode.
-      if state in self.targets[target]["offState"]:     # these states always result in light being turned off
-        self.log("state = {} turning off light".format(state))
-        self.turn_off(target)
-      elif state in self.targets[target]["onState"]:    # these states always result in light being turned on.
-        self.log("state = {} turning on light".format(state))
-        if state in self.targets[target]["dimState"]:                      # when turning on lights, media player determines whether to dim or not.
-          self.log("media player involved so dim lights")
-          self.turn_on(target,brightness=self.light_dim)
-        else:                                                   # it wasn't a media player dim situation so it's just a simple turn on the light.
-          self.log("state={} turning on light".format(state))
-          self.turn_on(target,brightness=self.light_max)
+      if state!=self.last_state:
+        self.last_state=state
+        if state in self.targets[target]["offState"]:     # these states always result in light being turned off
+          self.log("state = {} turning off light".format(state))
+          self.turn_off(target)
+        elif state in self.targets[target]["onState"]:    # these states always result in light being turned on.
+          self.log("state = {} turning on light".format(state))
+          if state in self.targets[target]["dimState"]:                      # when turning on lights, media player determines whether to dim or not.
+            self.log("media player involved so dim lights")
+            self.turn_on(target,brightness=self.light_dim)
+          else:                                                   # it wasn't a media player dim situation so it's just a simple turn on the light.
+            self.log("state={} turning on light".format(state))
+            self.turn_on(target,brightness=self.light_max)
+      else:
+        self.log("state did not change.  State={}".format(state))
     else:
       self.log("home override set so no automations performed")
 
@@ -104,7 +109,7 @@ class office_lights(appapi.my_appapi):
   #
   def normalize_state(self,target,trigger,type):
     newstate=self.get_state(trigger,type=type,min=self.lo_temp,max=self.hi_temp)
-    self.log("{} newstate={}".format(trigger,newstate))
+    #self.log("{} newstate={}".format(trigger,newstate))
     if newstate==None:                   # handle a newstate of none, typically means the object didn't exist.
       newstate=self.get_state(target)    # if thats the case, just return the state of the target so nothing changes.
     try:
@@ -116,3 +121,43 @@ class office_lights(appapi.my_appapi):
     elif newstate == "unk":
       newstate=self.get_state(target)
     return newstate
+
+  def listen_if(self,callback,target,attrib,opr,right,**kwargs):
+    self.listen_state(self.handle_listen_if,target,attribute=attrib,opr=opr,right=right,callback=callback,**kwargs)
+
+  def handle_listen_if(self,target,state,old,new,kwargs):
+    try:
+      l=int(new)
+    except:
+      try:
+        l=float(new)
+      except:
+        if isinstance(new,list):
+          l=new
+        elif isinstance(new,dict):
+          l=new
+        else:
+          l="'"+new+"'"
+    left=str(l)
+    try:
+      r=int(kwargs["right"])
+    except:
+      try:
+        r=float(kwargs["right"])
+      except:
+        if isinstance(kwargs["right"],list):
+          r=kwargs["right"]
+        elif isinstance(kwargs["right"],dict):
+          r=kwargs["right"]
+        else:
+          r="'"+str(kwargs["right"])+"'"
+    right=str(r)
+    expression=left + kwargs["opr"] + right
+    self.log("expression={}".format(expression))
+    if eval(expression):
+      kwargs["callback"](target,True,old,new)
+    else:
+      kwargs["callback"](target,False,old,new)
+
+  def li_handle(self,target,state,old,new,**kwargs):
+    self.log("target={},state={},old={},new={}".format(target,state,old,new))
