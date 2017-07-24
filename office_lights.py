@@ -1,10 +1,11 @@
 import my_appapi as appapi
-             
+
 class office_lights(appapi.my_appapi):
 
   def initialize(self):
     # self.LOGLEVEL="DEBUG"
     self.log("office_lights App")
+    self.fan=["off",0]
     if "targets" in self.args:
       self.targets=eval(self.args["targets"])
     else:
@@ -22,9 +23,9 @@ class office_lights(appapi.my_appapi):
     else:
       self.light_off=0
     if "fan_max" in self.args:
-      self.fan_max = self.args["fan_max"]
+      self.fan_high = self.args["fan_high"]
     else:
-      self.fan_max=254
+      self.fan_high=254
     if "fan_med" in self.args:
       self.fan_med = self.args["fan_med"]
     else:
@@ -33,18 +34,11 @@ class office_lights(appapi.my_appapi):
       self.fan_low=self.args["fan_low"]
     else:
       self.fan_low=64
-    if "fan_high_speed" in self.args:
-      self.fan_high_speed=self.args["fan_high_speed"]
-    else:
-      self.fan_high_speed="high"
-    if "fan_medium_speed" in self.args:
-      self.fan_medium_speed=self.args["fan_medium_speed"]
-    else:
-      self.fan_medium_speed="medium"
-    if "fan_low_speed" in self.args:
-      self.fan_low_speed=self.args["fan_low_speed"]
-    else:
-      self.fan_low_speed="low"
+
+    self.fan_high_speed="high"
+    self.fan_medium_speed="medium"
+    self.fan_low_speed="low"
+
     if "fan_off" in self.args:
       self.fan_off=self.args["fan_off"]
     else:
@@ -67,6 +61,31 @@ class office_lights(appapi.my_appapi):
       self.low_humidity=self.args["low_humidity"]
     else:
       self.low_humidity=59
+
+    if "fan_on_speed" in self.args:
+      try:
+        #we got a numeric value
+        sfo=int(float(self.args["fan_on_speed"]))
+        if (self.fan_on>self.fan_medium):
+          sfos=self.fan_high_speed
+        elif (self.fan_on>self.fan_low):
+          sfos=self.fan_medium_speed
+        else:
+          sfos=self.fan_low_speed
+      except:
+        sfos=self.args["fan_on_speed"]
+        if (sfos==self.fan_high_speed):
+          sfo=self.fan_high
+        elif (sfos==self.fan_medium_speed):
+          sfo=self.fan_med
+        else: 
+          sfo=self.fan_low
+    else:
+      sfo=self.fan_med
+      sfos=self.fan_medium_speed
+
+    self.fan[0]=sfos
+    self.fan[1]=sfo
 
     for ent in self.targets:
       for ent_trigger in self.targets[ent]["triggers"]:
@@ -104,29 +123,76 @@ class office_lights(appapi.my_appapi):
         else:  # if we aren't in ignore state, then it must be off state
           self.log("state = {} turning off light".format(state))
           if target_typ=="light":
-            self.turn_on(target,brightness=self.light_off)
+            self.my_turn_on(target,brightness=self.light_off)
           self.turn_off(target)
       elif state in self.targets[target]["onState"]:    # these states always result in light being turned on.
         if target_typ not in ["light","fan"]:
           self.log("state={} turning on {}".format(state,target))
-          self.turn_on(target)
+          self.my_turn_on(target)
         else:
           if state in self.targets[target]["dimState"]:                      # when turning on lights, media player determines whether to dim or not.
-            self.log("media player involved so dim lights")
-            level=self.light_dim
+            if target_typ=="light":
+              if self.targets[target]["type"]=="fan":
+                self.log("adjusting fan brightness")
+                self.my_turn_on(target,brightness=self.fan_low)
+              else:
+                self.log("dim lights")
+                self.my_turn_on(target,brightness=self.light_dim)
+            elif target_typ=="fan":
+              self.log("adjusting fan speed")
+              self.my_turn_on(target,speed=self.fan_low_speed)
+            else:
+              self.log("unknown type assuming light")
+              self.my_turn_on(target,brightness=self.light_dim)
           else:                                                   # it wasn't a media player dim situation so it's just a simple turn on the light.
             if self.targets[target]["type"]=="fan":
               if target_typ=="fan":
-                self.log("state={} turning on fan {} at speed {}".format(state,target,self.fan_medium_speed))
-                self.turn_on(target,speed=self.fan_medium_speed)
+                self.log("state={} turning on fan {} at speed {}".format(state,target,self.fan[0])) 
+                self.my_turn_on(target,speed=self.fan[0])
               else:
-                self.log("state={} turning on fan {} at brightness {}".format(state,target,self.fan_med))
-                self.turn_on(target,brightness=self.fan_med)
+                self.log("state={} turning on fan {} at brightness {}".format(state,target,self.fan[1]))
+                self.my_turn_on(target,brightness=self.fan[1])
             elif self.targets[target]["type"]=="light":
               self.log("state={} turning on light {} at brightness={}".format(state,target,self.light_max))
-              self.turn_on(target,self.light_max)
+              self.my_turn_on(target,brightness=self.light_max)
     else:
       self.log("home override set so no automations performed")
+
+
+  def my_turn_on(self,entity,**kwargs):
+    self.log("entity={} kwargs={}".format(entity,kwargs))
+    if not kwargs==None:
+      current_state=self.get_state(entity,"all")
+      attributes=current_state["attributes"]
+      current_state=current_state["state"]
+
+      self.log("current_state={}, attributes={}".format(current_state,attributes))
+      if "brightness" in kwargs:
+        if "brightness" in attributes:
+          if not attributes["brightness"]==kwargs["brightness"]:
+            self.log("turning on entity {} brightness {}".format(entity,kwargs["brightness"]))
+            self.turn_on(entity,brightness=kwargs["brightness"])
+          else:
+            self.log("brightness unchanged")
+        else:
+          if current_state=="off":
+            self.log("No Brightness assuming light {}")
+            self.turn_on(entity,brightness=kwargs["brightness"])
+      elif "speed" in kwargs:
+        if "speed" in attributes:
+          if not attributes["speed"]==kwargs["speed"]:
+            self.log("turning on entity {} speed {}".format(entity,kwargs["speed"]))
+            self.turn_on(entity,speed=kwargs["speed"])
+          else:
+            self.log("no change in speed")
+        else:
+          self.log("No Speed in attribute assuming fan")
+          self.turn_on(entity,speed=kwargs["speed"])
+      else:
+        self.log("unknown attributes {}".format(kwargs))
+    else:
+      self.log("turning on entity {}".format(entity))
+      self.turn_on(entity)
 
   #############
   #
@@ -177,9 +243,10 @@ class office_lights(appapi.my_appapi):
     state=0
     for trigger in self.targets[target]["triggers"]:      # loop through triggers
       t_dict=self.targets[target]["triggers"][trigger]
-      t_state=self.normalize_state(target,trigger,self.get_state(trigger))
+      t_state=str(self.normalize_state(target,trigger,self.get_state(trigger)))
       self.log("trigger={} onValue={} bit={} currentstate={}".format(trigger,t_dict["onValue"],t_dict["bit"],t_state))
       # or value for this trigger to existing state bits.
       state=state | (t_dict["bit"] if (t_state==t_dict["onValue"]) else 0)
+      self.log("state={}".format(state))
     return state
 
