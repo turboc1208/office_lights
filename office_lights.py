@@ -1,5 +1,7 @@
-import my_appapi as appapi
-
+import appdaemon.plugins.hass.hassapi as hass
+import datetime
+import time
+   
 ##############
 # 
 #  By design light_control is run for each room or logical combination of lights so multiple instances of it may be running at the same time.
@@ -21,31 +23,42 @@ import my_appapi as appapi
 #
 ##############
 
-class office_lights(appapi.my_appapi):
+class office_lights(hass.Hass):
 
   def initialize(self):
     # self.LOGLEVEL="DEBUG"
     self.log("office_lights App")
     self.fan=["off",0]
-
+#    exit(0)
+    self.delay_handles={}
     # Read appdaemon.yaml file
 
     # targets are a dictionary based structure of targets and one or more trigger that impact the state of the target.
     if "targets" in self.args:
       self.targets=eval(self.args["targets"])
+      self.log("self.targets={}".format(self.targets))
     else:
       self.log("targets must be defined in appdaemon.yaml file")
 
-    # for some rooms we don't want a light to turn on at full brightness, my office lights come on at 128 and dim to 50 when the tv is on for example.
-    if "light_max" in self.args:
-      self.light_max=self.args["light_max"]
+    # get time delay if lights turned on at night
+    if "night_delay" in self.args:
+      self.night_delay=self.args["night_delay"]
+      self.log("night_delay = {}".format(self.night_delay))
     else:
-      self.light_max=254
+      self.night_delay=15*60
 
-    if "light_dim" in self.args:
-      self.light_dim = self.args["light_dim"]
+    # for some rooms we don't want a light to turn on at full brightness, my office lights come on at 128 and dim to 50 when the tv is on for example.
+    if "lights_max" in self.args:
+      self.lights_max=self.args["lights_max"]
+      self.log("lights_max={}".format(self.lights_max))
     else:
-      self.light_dim=128
+      self.lights_max=254
+
+    if "lights_dim" in self.args:
+      self.lights_dim = self.args["lights_dim"]
+      self.log("self.lights_dim={}".format(self.lights_dim))
+    else:
+      self.lights_dim=128
 
     # In some cases especially with fans, the off value for the fan may still be technically on, just a slower setting.
     # I do this for my son's room, he has several computers in there that heat up the room so we keep the fan on at least a low setting all the time.
@@ -57,16 +70,19 @@ class office_lights(appapi.my_appapi):
     # in my office the fan is so close that setting the fan speed to 255 would blow all the papers off my desk, so the max is set lower than that.
     if "fan_max" in self.args:
       self.fan_high = self.args["fan_high"]
+      self.log("self.fan_high={}".format(self.fan_hight))
     else:
       self.fan_high=254
 
     if "fan_med" in self.args:
       self.fan_med = self.args["fan_med"]
+      self.log("self.fan_med={}".format(self.fan_med))
     else:
       self.fan_med=128
 
     if "fan_low" in self.args:
       self.fan_low=self.args["fan_low"]
+      self.log("self.fan_low={}".format(self.fan_low))
     else:
       self.fan_low=64
 
@@ -85,20 +101,24 @@ class office_lights(appapi.my_appapi):
     # these values are the names of the sliders that we read the value from for each occurance of the app.
     if "high_temp" in self.args:
       self.high_temp_slider=self.args["high_temp"]
+      self.log("self.high_temp_slider={}".format(self.high_temp_slider))
     else:
       self.log("high_temp must be configured in appdaemon.yaml")
     if "low_temp" in self.args:
       self.low_temp_slider=self.args["low_temp"]
+      self.log("self.low_temp_slider={}".format(self.low_temp_slider))
     else:
       self.log("low_temp must be configured in appdaemon.yaml")
     
     # humidity values to turn on/off the shower exhaust fans at.
     if "high_humidity" in self.args:
       self.high_humidity=self.args["high_humidity"]
+      self.log("self.high_humidity={}".format(self.high_humidity))
     else:
       self.high_humidity=60
     if "low_humidity" in self.args:
       self.low_humidity=self.args["low_humidity"]
+      self.log("self.low_humidity={}".format(self.low_humidity))
     else:
       self.low_humidity=59
 
@@ -137,17 +157,34 @@ class office_lights(appapi.my_appapi):
     for a in self.targets:
       for b in self.targets[a]["onState"]:
         if b>=0:
-          if b in self.targets[a]["offState"]:
-            self.log("onState overlaps offState in {} on element {}".format(a,b))
+          if b in self.targets[a]["offState"] + self.targets[a]["dimState"] + self.targets[a]["ignoreState"] + self.targets[a]["offdelayState"] :
+            self.log("onState overlaps in {}  on element {}".format(a,b))
             overlap=True
-          if b in self.targets[a]["ignoreState"]:
-            self.log("onState overlaps ignoreState in {} on element {}".format(a,b))
-            overlap=True
+
       for b in self.targets[a]["offState"]:
         if b>=0:
-          if b in self.targets[a]["ignoreState"]:
-            self.log("ignoreState overlaps offState in {} on element {}".format(a,b))
+          if b in self.targets[a]["onState"] + self.targets[a]["dimState"] + self.targets[a]["ignoreState"] + self.targets[a]["offdelayState"] :
+            self.log("offState overlaps in {} on element {}".format(a,b))
             overlap=True
+
+      for b in self.targets[a]["dimState"]:
+        if b>=0:
+          if b in self.targets[a]["onState"] + self.targets[a]["offState"] + self.targets[a]["ignoreState"] + self.targets[a]["offdelayState"] :
+            self.log("offState overlaps in {} on element {}".format(a,b))
+            overlap=True
+
+      for b in self.targets[a]["ignoreState"]:
+        if b>=0:
+          if b in self.targets[a]["onState"] + self.targets[a]["offState"] + self.targets[a]["dimState"] + self.targets[a]["offdelayState"] :
+            self.log("offState overlaps in {} on element {}".format(a,b))
+            overlap=True
+
+      for b in self.targets[a]["offdelayState"]:
+        if b>=0:
+          if b in self.targets[a]["onState"] + self.targets[a]["offState"] + self.targets[a]["dimState"] + self.targets[a]["ignoreState"] :
+            self.log("offState overlaps in {} on element {}".format(a,b))
+            overlap=True
+
     if overlap:
       self.log("Please fix configuration before continuing")
       exit
@@ -161,19 +198,26 @@ class office_lights(appapi.my_appapi):
         self.log("registering callback for {} on {} for target {}".format(ent_trigger,self.targets[ent]["callback"],ent))
      
         # if we are using the sun for a trigger, we want to run a scheduled for sunup and sunset instead of an event trigger.
+        #self.log("targets[{}]['triggers'][{}]['type']={}".format(ent,ent_trigger,self.targets[ent]["triggers"][ent_trigger]["type"]))
         if self.targets[ent]["triggers"][ent_trigger]["type"]=="sun":
+          self.log("registering sun triggers")
           self.run_at_sunrise(self.process_sun,offset=5*60,target=ent)
+          self.log("sunrise trigger set")
           self.run_at_sunset(self.process_sun,offset=5*60,target=ent)
+          self.log("sunset trigger set")
         else:
           # ok it's not sun so lets just setup an even trigger.
+          self.log("registering normal state trigger")
           self.listen_state(self.targets[ent]["callback"],ent_trigger,target=ent)
       # End of trigger loop
 
       # all callbacks have been setup.  
       # lets process the current state of each target as we start up just to make sure everything is in the right state now.
+      self.log("Lets process lights quickly for {} to make sure we are up to date".format(ent))
       self.process_light_state(ent)      # process each light as we register a callback for it's triggers rather than wait for a trigger to fire first.
 
-   # End of target (ent) loop
+    # End of target (ent) loop
+    self.log("Office_lights End of initialization")
 
   ########
   #
@@ -185,16 +229,6 @@ class office_lights(appapi.my_appapi):
     # a trigger based on sunup or sunset fired so check the target entity it was associated with.
     self.process_light_state(kwargs["target"])    # something changed so go evaluate the state of everything
 
-#    # either run_at_sunrise or run_at_sunset was triggered so re-register it.
-#    if self.sun_up():
-#      # there is currently an issue where when the sun schedule fires and we try to re-schedule an event that same second,
-#      # the next time it's triggered, it triggers before sunset so it thinks the sun is still above the horizon. 
-#      # so to account for that we are just triggering at 5 minutes past sunup or sunset.
-#      self.run_at_sunrise(self.process_sun,offset=5*60,target=kwargs["target"])
-#    else:
-#      self.run_at_sunset(self.process_sun,offset=5*60,target=kwargs["target"])
-  
-   
   ########
   #
   # state change handler.  All it does is call process_light_state all the work is done there.
@@ -203,6 +237,31 @@ class office_lights(appapi.my_appapi):
     self.log("trigger = {}, attr={}, old={}, new={}, kwargs={}".format(trigger,attr,old,new,kwargs))
     self.process_light_state(kwargs["target"])
 
+  def notify_state_handler(self,trigger,attr,old,new,kwargs):
+    self.log("trigger - {}, attr={}, old={}, new={}, kwargs={}".format(trigger,attr,old,new,kwargs))
+    self.process_alert(kwargs["target"])
+
+  def process_alert(self,target,**kwargs):
+    self.log("In process_alert target-{}".format(target))
+    state=0
+    type_bits={}
+    state=self.bit_mask(target)
+    self.log("process_alert state={}".format(state))
+    if(self.check_override_active(target)):
+      self.log("Override Active")
+    elif state in self.targets[target]["ignoreState"]:
+      self.log("state={} ignoring state".format(state))
+    elif state in self.targets[target]["offState"]:
+      self.log("cannot turnoff notify ")
+    elif state in self.targets[target]["offdelayState"]:
+      self.log("Cannot turn off notify even with a delay")
+    elif state in self.targets[target]["onState"]:
+      self.log("target - {}, message - {} on - {}".format(target,self.targets[target]["notify_Message"],self.targets[target]["alexa_device"]))
+      self.fire_event("SPEAK_EVENT",media_player=self.targets[target]["alexa_device"],message=self.targets[target]["notify_Message"])
+    elif state in self.targets[target]["dimState"]:
+      self.log("Cannot dim notify")
+    else :
+      self.log("unknown state {}".format(state))
 
   ########
   #
@@ -210,6 +269,8 @@ class office_lights(appapi.my_appapi):
   #
   def process_light_state(self,target,**kwargs):
     # build current state binary flag.
+    self.log("self.name={}".format(self.name))
+    self.set_state("sensor."+self.name,state=self.time().strftime("%H:%M:%S"))
     state=0
     type_bits={}
     target_typ,target_name=self.split_entity(target)
@@ -222,91 +283,120 @@ class office_lights(appapi.my_appapi):
     self.log("state={}".format(state))
 
     # first is an override that impacts the target in effect (input_booleans are used to represent overrides in HA)  
-    if (not self.check_override_active(target)):   # if the override bit is set, then don't evaluate anything else.  Think of it as manual mode
-     
-      # ok, if we aren't turning the target on, or dimming it, then we must be either turning it off or ignoring it.
-      if (not state in self.targets[target]["onState"]) and (not state in self.targets[target]["dimState"]):     # these states always result in light being turned off or ignored
-        
-        # are we ignoring the target at this time.
-        if state in self.targets[target]["ignoreState"]:
-          self.log("state={}, ignoring state".format(state))
+    if (self.check_override_active(target)):   # if the override bit is set, then don't evaluate anything else.  Think of it as manual mode
+      self.log("Override active")
 
-        # if we aren't ignoring it, we must be turning it off
+    elif state in self.targets[target]["ignoreState"]:
+      # The light state is right where it is, so don't change it.
+      self.log("state={} ignoring state".format(state))
+
+    elif state in self.targets[target]["offState"]:
+      # first lets clean up any remaining delay turnoffs
+      self.stop_delay_listener(target)
+
+      if target_typ=="light":     
+        self.log("state {} dimmingf light {} to off state".format(state,target))
+        # if the target is a light, turn the brightness to the off state before turning the light off.
+        self.my_turn_on(target,brightness=self.light_off)
+      # now regardless of the target type, turn it off.
+      self.log("state {} turning device {} off".format(state,target))
+      self.my_turn_off(target)
+
+    elif state in self.targets[target]["offdelayState"]:
+      self.log("delay_handles={}".format(self.delay_handles))
+      if target in self.delay_handles:
+        self.log("state={} delay for {} already active".format(state,target))
+      else:
+        self.log("state={} turn off delay activated for {}".format(state,target))
+        self.delay_handles[target]=self.listen_state(self.delay_trigger, target, new = "on", duration = self.night_delay, immediate=True, oneshot=True, delay=True, source="appdaemon")
+
+    elif state in self.targets[target]["onState"]:
+      # Ok we are turning things on
+
+      # first lets clean up any remaining delay turnoffs
+      self.stop_delay_listener(target)
+
+      if target_typ in ["light","fan"]:
+        # Fans and lights have dimmer and speed qualities that we have to address
+
+        if target_typ=="fan":
+          # this is a fan, it doesn't matter what it thinks it is, it's a fan.
+          self.log("state={} turning on fan {} at speed {}".format(state,target,self.fan[0]))
+          self.my_turn_on(target,speed=self.fan[0])
+
         else:
-          self.log("state = {} turning off light".format(state))
+          # this could be a light or a light that is controlling a fan
+          if self.targets[target]["type"]=="fan":
+            # this thinks it's a fan so treat it like a fan controlled by brightness instead of speed settings.
+            self.log("state={} turning on fan {} at brightness {}".format(state,target,self.fan[1]))
+            self.my_turn_on(target,brightness=self.fan[1])
 
-          # lights and switches turn off slightly differently.
-          if target_typ=="light":
-            # because lights dim, we are going to tell it to dim to 0 
-            self.my_turn_on(target,brightness=self.light_off)
-          
-          # now that we have handled lights, everything including lights responds to a turn_off signal
-          self.turn_off(target)
+          elif self.targets[target]["type"]=="light":
+            # This thinks its a light so turn it on with brightness settings
+            self.log("state={} turning on light {} at brightness {}".format(state,target,self.lights_max))
+            self.my_turn_on(target,brightness=self.lights_max)
+          else:
+            self.log("this device doesn't know what it is trying to be : {}".format(self.targets[target]["type"]))
+      else:
+        # this isn't a light or a fan so just turn it on whatever it is
+        self.log("state={} turning on {}".format(state,target))
+        self.my_turn_on(target)
 
-      # ok, we were not turning the target off, or ignoring it, so we must be turning it on or dimming it.
-      # because dimming uses the turn_on command we are handling them both here.
-      elif state in self.targets[target]["onState"]:    # these states always result in light being turned on.
- 
-        # if it's not a light or a fan, then just turn it on.
-        if target_typ not in ["light","fan"]:
-          self.log("state={} turning on {}".format(state,target))
-          self.my_turn_on(target)
-        else:
-         
-          # we are dealing with a light or a fan (something with more than an on/off state
-          # are we trying to dim it
-          if state in self.targets[target]["dimState"]:                      # when turning on lights, media player determines whether to dim or not.
-            
-            # we are dimming it
-            if target_typ=="light":
-              # it is a light entity type.
+    elif state in self.targets[target]["dimState"]:
+      # first lets clean up any remaining delay turnoffs
+      self.stop_delay_listener(target)
 
-              # this is a little confusing here.  Older fan switches, reported as lights, so here we are checking not on what the switch is reporting as
-              # we know it's reporting as a light, but are we using it to control a light or a fan?
-              if self.targets[target]["type"]=="fan":
-                self.log("adjusting fan brightness")
-                self.my_turn_on(target,brightness=self.fan_low)
-              else:
-                self.log("dim lights")
-                self.my_turn_on(target,brightness=self.light_dim)
-           
-            # ok, this device is reporting as a fan, not a light so it's only got high/medium/low/off states.
-            elif target_typ=="fan":
-              self.log("adjusting fan speed")
-              self.my_turn_on(target,speed=self.fan_low_speed)
-            else:
-              # we don't know what this is, so we are just going to treat it like a light and see what happens
-              self.log("unknown type assuming light")
-              self.my_turn_on(target,brightness=self.light_dim)
-  
-          # we aren't dimming anything, it's a true turn on situation
-          else:                                                   
-            # are we turning on a target we are using as a fan
-            if self.targets[target]["type"]=="fan":
+      if target_typ in ["light"]:
+          if self.targets[target]["type"]=="light": 
+            # This thinks its a light so turn it on with brightness settings
+            self.log("state={} turning on light {} at brightness {}".format(state,target,self.lights_dim))
+            self.my_turn_on(target,brightness=self.lights_dim)
+          else:
+            self.log("{} cannot be dimmed".format(self.targets[target]["type"]))
+      else:
+        # this isn't a light so it can't be dimmed
+        self.log("{} cannot be dimmed".format(target_typ))
+    else:
+      self.log("unknown state {}".format(state))
 
-              # is it reporting as a fan  (not sure why we tested this in a different order than above, but who cares it does the same
-              if target_typ=="fan":
+  ########
+  #
+  #  delay listen trigger
+  #
+  ########            
+  def delay_trigger(self,entity,estate,old,new,kwargs):
+    self.log("delay callback fired for {}".format(entity))
+    self.my_turn_off(entity)
 
-                # we are using it as a fan and it is reporting as a fan so use the high/medium/low settings
-                self.log("state={} turning on fan {} at speed {}".format(state,target,self.fan[0])) 
-                self.my_turn_on(target,speed=self.fan[0])
-              else:
+  ########
+  #
+  #  Stop delay listener - Removes delay listener from schedule
+  #
+  #######
+  def stop_delay_listener(self,target):
+    if target in self.delay_handles:
+      try:
+        self.cancel_listen_state(self.delay_handles[target])
+      except:
+        self.log("{} listener in dictionary but not in system continuing".format(target))
+      self.delay_handles.pop(target)
 
-                # we are treating it as a fan, but it's not reporting as a fan, so adjust the brightness
-                self.log("state={} turning on fan {} at brightness {}".format(state,target,self.fan[1]))
-                self.my_turn_on(target,brightness=self.fan[1])
 
-            # it's not something we are treating as a fan, so is it something we think is a light?
-            elif self.targets[target]["type"]=="light":
 
-              # it something we are treating as a light, so turn it on and set it's brightness
-              self.log("state={} turning on light {} at brightness={}".format(state,target,self.light_max))
-              self.my_turn_on(target,brightness=self.light_max)
-
-    
-    else: # assicated with override check above 
-      self.log("home override set so no automations performed")
-
+  ########
+  #
+  #  turn off override, right now it doesn't do anything, but it might need to so I put it in just in case.
+  #
+  ########
+  def my_turn_off(self,entity,**kwargs):
+    #self.log("turning off {}".format(entity))
+    etyp,ename=self.split_entity(entity)
+    self.turn_off(entity)
+    if etyp=="light":
+      i=0
+      while ((not self.get_state(entity)=="off") and (i<100)):
+        self.log("waiting for {} to turn off brightness={}".format(entity,self.get_state(entity,attribute="brightness"))) 
+        i=i+1
 
   #########
   #
@@ -314,62 +404,71 @@ class office_lights(appapi.my_appapi):
   #
   #########
   def my_turn_on(self,entity,**kwargs):
-    #self.log("entity={} kwargs={}".format(entity,kwargs))
+    self.log("entity={} kwargs={}".format(entity,kwargs))
 
     # were any additional arguements passed in through kwargs
     if not kwargs=={}:
       # get the entities current state
-      current_state=self.get_state(entity,"all")
-      attributes=current_state["attributes"]
-      current_state=current_state["state"]
+      if self.entity_exists(entity):
+        cstate=self.get_state(entity,attribute="all")
+        attributes=cstate["attributes"]
+        current_state=cstate["state"]
 
-      #self.log("current_state={}, attributes={}".format(current_state,attributes))
+        self.log("current_state={}, attributes={}".format(current_state,attributes))
 
-      # was brightness passed in through kwargs
-      if "brightness" in kwargs:
+        # was brightness passed in through kwargs
+        if "brightness" in kwargs:
 
-        # does the target respond to brightness
-        if "brightness" in attributes:
+          # does the target respond to brightness
+          if "brightness" in attributes:
 
-          # did the brightness actually change or was it something else that triggered this
-          if not attributes["brightness"]==kwargs["brightness"]:
-            # brightness changed so send the change to the entity
-            self.turn_on(entity,brightness=kwargs["brightness"])
+            # did the brightness actually change or was it something else that triggered this
+            if not attributes["brightness"]==kwargs["brightness"]:
+              # brightness changed so send the change to the entity
+              self.turn_on(entity,brightness=kwargs["brightness"])
 
+            else:
+              # the brightness didn't change it was something else, so don't do anything
+              self.log("brightness unchanged")
           else:
-            # the brightness didn't change it was something else, so don't do anything
-            self.log("brightness unchanged")
-        else:
-          # brightness is not an attribute of this entity (or the entity is turned off )
+            # brightness is not an attribute of this entity (or the entity is turned off )
 
-          # is the entity turned off
-          if current_state=="off":
+            # is the entity turned off
+            if current_state=="off":
 
-            # the entity is turned off, so the brightness wouldn't have shown in the attributes, so we can turn it on.
-            self.turn_on(entity,brightness=kwargs["brightness"])
+              # the entity is turned off, so the brightness wouldn't have shown in the attributes, so we can turn it on.
+              self.turn_on(entity,brightness=kwargs["brightness"])
 
-      # did the high/medium/low type of speed get passed in, instead of brightness
-      elif "speed" in kwargs:
+        # did the high/medium/low type of speed get passed in, instead of brightness
+        elif "speed" in kwargs:
         
-        # does this entity support speed?
-        if "speed" in attributes:
+          # does this entity support speed?
+          if "speed" in attributes:
     
-          # are the speeds the same
-          if not attributes["speed"]==kwargs["speed"]:
-            # no so turn on the fan
+            # are the speeds the same
+            if not attributes["speed"]==kwargs["speed"]:
+              # no so turn on the fan
+              self.turn_on(entity,speed=kwargs["speed"])
+            else:
+              # yes speeds are the same so something else changed nothing to do here
+              self.log("no change in speed")
+          else:  # speed is not in attributes
             self.turn_on(entity,speed=kwargs["speed"])
-          else:
-            # yes speeds are the same so something else changed nothing to do here
-            self.log("no change in speed")
-        else:  # speed is not in attributes
-          self.turn_on(entity,speed=kwargs["speed"])
 
-      # say what??
+        # say what??
+        else:
+          self.log("unknown attributes {}".format(kwargs))
       else:
-        self.log("unknown attributes {}".format(kwargs))
+        self.log("Entity {} does not exist in its entirity, HA may have just restarted".format(entity))
     else:
-      # no special handling required, just turn it on.
-      self.turn_on(entity)
+      # no kwargs passed in so no special handling required, just turn it on.
+      devtyp,device=self.split_entity(entity)
+      if devtyp=="lock":
+        self.log("About to lock {}".format(entity))
+        self.call_service("lock/lock",entity_id=entity)
+      else:
+        self.turn_on(entity)
+    self.log("Done")
 
   #############
   #
@@ -409,6 +508,9 @@ class office_lights(appapi.my_appapi):
 
         # ok we aren't dealing with temperature how about humidity
         elif self.targets[target]["triggers"][trigger]["type"]=="humidity":
+          self.low_humidity=self.get_state("sensor.master_relative_humidity")
+          self.high_humidity=self.low_humidity+3
+          self.log("resetting low_humidity to {} and high_humidity to {}".format(self.low_humidity,self.high_humidity))
           currenthumidity = newstate
           # if currenthumidity is > high set point, send back on
           if currenthumidity>=self.high_humidity:                     # handle temp Hi / Low state setting to on/off.
@@ -480,6 +582,7 @@ class office_lights(appapi.my_appapi):
       t_dict=self.targets[target]["triggers"][trigger]
 
       # get the current state of the trigger device to compare against the on_state from the dictionary above
+      self.log("get_state({})={}".format(trigger,self.get_state(trigger)))
       t_state=str(self.normalize_state(target,trigger,self.get_state(trigger)))
 
       self.log("trigger={} onValue={} bit={} currentstate={}".format(trigger,t_dict["onValue"],t_dict["bit"],t_state))
